@@ -1,0 +1,8 @@
+streamlit>=1.37
+plotly>=5.20
+pandas>=2.1
+numpy>=1.26
+yfinance>=0.2.40
+requests>=2.31
+python-dotenv>=1.0
+pytest>=8.0

@@ -1,0 +1,151 @@
+# US Stock Technical Analysis Bot
+
+Rule-based technical analysis for US stocks/ETFs with a Streamlit + Plotly UI, alerts, a risk calculator and a
+conservative backtester. **Educational/research use only. Not financial advice, not a profit predictor.**
+
+## What is in this version
+
+| Page | What it does |
+|---|---|
+| Home | Market status, last signals, shortcuts |
+| Live scanner | Two-stage screen (daily price/liquidity, then 1-minute features), 0-100 explainable score, lifecycle states, Telegram alerts, news/catalyst check, "has this pattern happened before?" |
+| Company history | Full price history since the data starts, drawdowns/surges/gaps/reversals, SEC filings matched by type and timing, annual financials, HTML report |
+| Technical analysis | The original chart, indicators, 11 rule setups, risk calculator, backtest, watchlist alerts |
+| Journal & testing | Every signal is stored (including failures), outcome tracking, strict replay backtest with baselines, calibration gate |
+| Settings & status | Editable thresholds/weights, source status (keys never shown), Telegram test, run log |
+
+## Project tree
+
+```
+app.py                       Router: sidebar navigation to the pages below
+ui/                          theme.py (palette, cards), page_*.py (one file per page), common.py
+config.py                    Env-driven settings, interval map, logging (console + logs/app.log)
+data/market_data.py          Daily/intraday providers with provenance (original)
+data/us_calendar.py          NYSE holidays, early closes, session hours, market status
+scanner/config.py            ScannerConfig: every threshold and weight, saved to scanner_settings.json
+scanner/providers.py         MinuteProvider interface, yfinance + in-memory/CSV providers
+scanner/features.py          RVOL (time-of-day aware), VWAP, returns, breakout level/streaks, relative strength
+scanner/scoring.py           0-100 score + bilingual reasons; missing data lowers the score
+scanner/states.py            watch / early / near_breakout / confirmed / failed / expired
+scanner/engine.py            Scanner: fetch -> filter -> features -> score -> state -> journal -> alert
+scanner/signal_log.py        SQLite journal, alert de-duplication, outcome tracking
+scanner/backtest.py          Strict replay, costs, ambiguity rule, baselines, development/hold-out split
+scanner/calibration.py       Score -> probability only if it passes hard gates
+scanner/catalysts.py         Recent headlines (display only), keyword category tags
+scanner/universe.py          Nasdaq Trader symbol directory parser (NASDAQ/NYSE common stocks)
+scanner/stream.py            Reconnect/back-off/de-dup wrapper for a future paid WebSocket feed
+scanner/notify.py            Telegram alert text
+history/loader.py            Max daily history, split/dividend labelling, coverage notes
+history/events.py            Configurable event detection, market comparison, split-artifact flag
+history/explain.py           Evidence classes, filing timing vs the move
+history/sec.py               SEC EDGAR client (User-Agent required), filing parser
+history/financials.py        Annual XBRL summary, margins, FCF, descriptive flags
+history/report.py            Report builder + self-contained RTL HTML export
+history/link.py              Descriptive "similar past breakouts" for a scanner candidate
+indicators/ analysis/ backtest/ charts/ alerts/    Original technical-analysis modules (unchanged API)
+tests/                       Unit tests + UI smoke test (see "Tests")
+```
+
+## Install and run
+
+Requires Python 3.11+.
+
+Windows (PowerShell):
+```powershell
+py -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+copy .env.example .env     # optional: add keys
+streamlit run app.py
+```
+macOS / Linux:
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+streamlit run app.py
+```
+Run the tests: `python -m pytest -q`
+
+## Environment variables (.env, never committed)
+
+- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`: create a bot with @BotFather, message it, then read your chat id from
+  `https://api.telegram.org/bot<token>/getUpdates`. Settings page has a test-message button.
+- `SEC_USER_AGENT="Your Name you@email.com"`: required by SEC for filings/financials. Without it those parts are
+  switched off (the app says so); nothing is guessed.
+- `ALPHAVANTAGE_API_KEY`: optional, technical-analysis page only (free tier is rate-limited).
+
+## How the scanner decides
+
+Pre-filters (editable): price 2-50 USD, average dollar volume >= 5M (mean of earlier sessions), spread <= 0.5% only when
+a real bid/ask exists, at least 3 earlier sessions for baselines.
+
+Features (1-minute completed bars, regular session): RVOL of the last 5 minutes versus the same window in earlier sessions
+(smoothed +-5 min; cumulative RVOL is shown for information), VWAP, 1/5/15-minute returns and acceleration, break of the
+15-minute high, hold ratio after the break, EMA20/EMA50, RSI, 15-minute strength versus SPY.
+
+Score = 100 x sum(points)/sum(all weights). Default weights: RVOL 25, momentum 20, breakout 20, liquidity 15, relative
+strength 10, continuation 10. A component with missing data scores 0 but keeps its weight, so **missing data can only
+lower a score**; `coverage` shows how much of the score is backed by data and candidates below 60% are never actionable.
+The score is a ranking aid. **It is not a probability of success.**
+
+States: watching, early indicators, approaching breakout, confirmed breakout (RVOL, 5-min return and score thresholds),
+failed (closed back below the level), expired (30 min without renewal). "Extended" moves (far above the level/VWAP) are
+flagged and not actionable. Market closed or stale data also makes everything non-actionable.
+
+Alerts fire on new events only: first alert, a higher-ranked state, a failure after a confirmed alert, a new higher
+level, or a score jump of 15+. A repeat of the same state needs a reset and the cooldown.
+
+## Backtest rules (scanner)
+
+Signal on a completed bar, fill at the next bar's open plus assumed slippage and commission; if target and stop fall in the
+same 1-minute bar the result is "ambiguous" and counts as not a win; stop gaps fill at the open; sessions are split
+chronologically into development and hold-out; random-entry and simple-momentum baselines use the same costs and universe;
+rates come with Wilson 95% intervals and a "too few samples" flag. Nothing is tuned by the code.
+
+## Calibration
+
+A probability is shown only if: >= 200 resolved signals, >= 4 sessions, enough wins and losses in both parts, a positive
+score slope, and a Brier-score gain of >= 2% over a constant base rate on **later sessions**, confirmed in >= 95% of
+bootstrap resamples. Otherwise the page says why none is shown.
+
+## Company history: how causes are labelled
+
+Events are detected on split-adjusted daily closes with configurable thresholds and compared with SPY. Splits are never
+reported as crashes. Each event gets one label: **direct evidence** (a high-weight SEC filing was accepted before the first
+move day's open and the move is abnormal and not market-driven), **probable** (two clues or unclear timing),
+**coincident**, or **unresolved**. The tool matches filing type and timing only; **it does not read the filing text**, and
+free sources have no historical news archive, so no news is attributed to old events.
+
+## Data provider limitations (read this)
+
+- yfinance is unofficial, delayed and rate-limited. 1-minute history is about 7 days; 5/15-minute about 60 days; 1-hour about
+  730 days. It has no bid/ask, so spread is "unavailable" and costs in backtests are assumptions.
+- There is **no real-time feed and no WebSocket vendor wired in**. `scanner/stream.py` is a tested reconnect/de-dup wrapper for
+  one to be added later (a paid provider such as Polygon, Alpaca or Finnhub). Until then every price is labelled delayed.
+- The Nasdaq Trader list contains currently listed names only (survivorship bias for any historical study).
+- yfinance `Close` is split-adjusted, `AdjClose` also dividend-adjusted; raw as-traded prices are not available.
+- Holiday/early-close calendar is rule-based; one-off closures (national mourning days, weather) are not known.
+- PDF export: open the HTML report in a browser and print to PDF.
+
+## Tests
+
+`python -m pytest -q`. The UI smoke test runs the real pages with Streamlit's own test harness when Streamlit is installed.
+
+Not covered by any automated test and not verified in the development sandbox (no outbound access there): live Yahoo,
+SEC and Nasdaq Trader calls, live Telegram delivery, how pages look in a browser, and Plotly figure options.
+Verify these on your machine with the "Test data source" and "Test Telegram" buttons on the Settings page.
+
+## Troubleshooting
+
+- *"Provider returned no data"*: wrong ticker, holiday, or Yahoo rate limiting. Wait a minute or scan fewer tickers.
+- *Scanner finds nothing*: normal outside market hours and often during it; the scanner does not invent signals.
+- *"fewer than 3 prior sessions: liquidity unknown"*: the provider returned too little 1-minute history for that name.
+- *SEC features off*: set `SEC_USER_AGENT` in `.env` and restart the app.
+- *Import errors*: run from the project root with the virtualenv active.
+
+## Known limitations / future work
+
+Free delayed data only; no sector-relative strength (needs a sector map); catalyst tags are keyword hints; weights and
+thresholds are starting points that must be judged only on sessions not used to tune them; no automatic order execution
+(deliberately out of scope).

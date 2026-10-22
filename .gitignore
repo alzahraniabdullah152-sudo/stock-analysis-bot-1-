@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+signals.db
+scanner_settings.json
+universe_cache.csv
+.cache_sec/
+watchlist.json
+.alert_state.json
+.pytest_cache/
+*.html
+!tests/**/*.html

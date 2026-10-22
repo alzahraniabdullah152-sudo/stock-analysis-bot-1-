@@ -1,0 +1,49 @@
+"""Streamlit entry point. Run:  streamlit run app.py   (educational research tool, not financial advice)."""
+from __future__ import annotations
+
+import streamlit as st
+
+from config import setup_logging
+
+setup_logging()
+st.set_page_config(page_title="بوت تحليل الأسهم", page_icon="📈", layout="wide")
+
+from ui import page_analysis, page_company, page_home, page_journal, page_scanner, page_settings, theme  # noqa: E402
+
+theme.inject()
+
+PAGES = {
+    "home": "🏠 الرئيسية",
+    "scanner": "🔎 الماسح اللحظي",
+    "company": "📚 تاريخ الشركة",
+    "analysis": "📈 التحليل الفني",
+    "journal": "🧾 السجل والاختبار",
+    "settings": "⚙️ الإعدادات والحالة",
+}
+
+
+def go_to(page: str) -> None:
+    st.session_state.nav = page
+
+
+if "nav" not in st.session_state:
+    st.session_state.nav = "home"
+
+with st.sidebar:
+    st.markdown("### 📈 بوت تحليل الأسهم")
+    st.radio("القائمة", list(PAGES), format_func=PAGES.get, key="nav", label_visibility="collapsed")
+    st.caption("تعليمي وبحثي فقط، وليس نصيحة مالية.")
+
+page = st.session_state.nav
+if page == "home":
+    page_home.render(go_to)
+elif page == "scanner":
+    page_scanner.render()
+elif page == "company":
+    page_company.render()
+elif page == "analysis":
+    page_analysis.render()
+elif page == "journal":
+    page_journal.render()
+else:
+    page_settings.render()
